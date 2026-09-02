@@ -51,9 +51,12 @@ class handler(BaseHTTPRequestHandler):
 
             # Kortare an CLI:ts standard-60s av samma skal - se
             # gather_dossier/ensembl_paralog_count docstrings i
-            # candidate_gene_dossier.py. Testat lokalt: ~11-19s totalt for
-            # tva arter aven nar bada paralog-anropen timar ut.
-            result = gather_dossier(gene_symbol, species_list, paralog_timeout=8)
+            # candidate_gene_dossier.py. gather_dossier kor allt parallellt
+            # i trådar, sa 20s timeout hojer inte totala svarstiden linjart -
+            # en tidigare sekventiell 8s-variant timeoutade upprepat i
+            # produktion (annan natverksväg till Ensembl an lokalt testat),
+            # se historik i candidate_gene_dossier.py.
+            result = gather_dossier(gene_symbol, species_list, paralog_timeout=20)
             status = 200
         except Exception as exc:
             result = {"error": str(exc)}

@@ -6,6 +6,8 @@ tillgangligt innan egen provtagning eller synteny-analys planeras.
 Kor: python candidate_gene_dossier.py
 """
 
+from concurrent.futures import ThreadPoolExecutor
+
 import requests
 
 
@@ -177,48 +179,69 @@ def eva_species_registered(scientific_name: str) -> bool:
     )
 
 
+def _gather_one_species(gene_symbol: str, organism: str, paralog_timeout: int) -> dict:
+    hits = uniprot_gene_hits(gene_symbol, organism)
+    genes = unique_ensembl_genes(hits)
+    matchade_namn = sorted({h["matched_gene_name"] for h in hits if h["matched_gene_name"]})
+    broadened = bool({n.lower() for n in matchade_namn} - {gene_symbol.lower()})
+
+    paralogs: dict[str, int | str] = {}
+    ensembl_species = organism.lower().replace(" ", "_")
+    for gene in genes:
+        try:
+            paralogs[gene] = ensembl_paralog_count(gene, ensembl_species, timeout=paralog_timeout)
+        except requests.exceptions.RequestException as e:
+            paralogs[gene] = f"fel: {e.__class__.__name__}"
+
+    return {
+        "organism": organism,
+        "hit_count": len(hits),
+        "hits": hits,
+        "unique_ensembl_genes": sorted(genes),
+        "isoform_warning": len(hits) > len(genes) and bool(genes),
+        "matched_gene_names": matchade_namn,
+        "broadened_search": broadened,
+        "paralogs": paralogs,
+    }
+
+
 def gather_dossier(gene_symbol: str, species_list: list[str], paralog_timeout: int = 60) -> dict:
     """Samlar all dossier-data for en gen, utan att skriva ut nagot.
 
     Ren datainsamlingsfunktion - anvands bade av print_dossier (CLI) och
-    av webb-API:t (api/pipeline.py) sa de tva ytorna aldrig kan divergera
+    av webb-API:t (api/gene_dossier.py) sa de tva ytorna aldrig kan divergera
     i vad de faktiskt rapporterar.
 
     paralog_timeout: se ensembl_paralog_count - CLI:t anvander standard 60s,
     webb-API:t skickar in ett kortare varde for att hinna inom Vercels
-    30s maxDuration for hela requesten."""
-    per_species = []
-    for organism in species_list:
-        hits = uniprot_gene_hits(gene_symbol, organism)
-        genes = unique_ensembl_genes(hits)
-        matchade_namn = sorted({h["matched_gene_name"] for h in hits if h["matched_gene_name"]})
-        broadened = bool({n.lower() for n in matchade_namn} - {gene_symbol.lower()})
+    30s maxDuration for hela requesten.
 
-        paralogs: dict[str, int | str] = {}
-        ensembl_species = organism.lower().replace(" ", "_")
-        for gene in genes:
-            try:
-                paralogs[gene] = ensembl_paralog_count(gene, ensembl_species, timeout=paralog_timeout)
-            except requests.exceptions.RequestException as e:
-                paralogs[gene] = f"fel: {e.__class__.__name__}"
+    Allt (per-art-uppslagen inklusive paralog-anropen, plus SRA/GEO/EVA)
+    kors PARALLELLT i trådar, inte sekventiellt - en tidigare sekventiell
+    version med 8s paralog-timeout gav ~8-16s totalt lokalt, men timeout:ade
+    upprepat i produktion pa Vercel (annan natverksväg till Ensembl,
+    2026-09-02, upptäckt av användaren efter att igf1 gav ReadTimeout pa
+    O. niloticus tva ganger i rad). Parallellisering later oss hoja
+    paralog_timeout utan att summan av alla anrop vaxer linjart - en langsam
+    tjanst blockerar bara sin egen del, inte hela requesten."""
+    with ThreadPoolExecutor(max_workers=len(species_list) * 2 + 2) as executor:
+        species_futures = {
+            organism: executor.submit(_gather_one_species, gene_symbol, organism, paralog_timeout)
+            for organism in species_list
+        }
+        sra_future = executor.submit(sra_rna_seq_count, species_list)
+        geo_future = executor.submit(geo_dataset_count, species_list)
+        eva_futures = {organism: executor.submit(eva_species_registered, organism) for organism in species_list}
 
-        per_species.append({
-            "organism": organism,
-            "hit_count": len(hits),
-            "hits": hits,
-            "unique_ensembl_genes": sorted(genes),
-            "isoform_warning": len(hits) > len(genes) and bool(genes),
-            "matched_gene_names": matchade_namn,
-            "broadened_search": broadened,
-            "paralogs": paralogs,
-        })
+        per_species = [species_futures[organism].result() for organism in species_list]
+        eva_status = {organism: eva_futures[organism].result() for organism in species_list}
 
     return {
         "gene_symbol": gene_symbol,
         "species": per_species,
-        "sra_rna_seq_count": sra_rna_seq_count(species_list),
-        "geo_dataset_count": geo_dataset_count(species_list),
-        "eva_status": {organism: eva_species_registered(organism) for organism in species_list},
+        "sra_rna_seq_count": sra_future.result(),
+        "geo_dataset_count": geo_future.result(),
+        "eva_status": eva_status,
     }
 
 
