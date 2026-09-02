@@ -14,38 +14,48 @@ Kor: python marker_fenotyp_koppling.py
 """
 
 import csv
+import io
 from pathlib import Path
 
 GENOTYP_CSV = Path(__file__).parent / "genotyper_exempel.csv"
 FENOTYP_CSV = Path(__file__).parent / "fenotyper_exempel.csv"
 
 
+def parse_genotyper(csv_text: str) -> dict[str, dict[str, str]]:
+    """Som las_genotyper, men fran en CSV-strang istallet for en fil pa
+    disk - anvands av webb-API:t for uppladdad/inklistrad CSV-data."""
+    genotyper = {}
+    reader = csv.DictReader(io.StringIO(csv_text))
+    markor_kolumner = [k for k in (reader.fieldnames or []) if k != "djur_id"]
+    for rad in reader:
+        genotyper[rad["djur_id"]] = {m: rad[m] for m in markor_kolumner}
+    return genotyper
+
+
 def las_genotyper(path: Path) -> dict[str, dict[str, str]]:
     """djur_id -> {markornamn: genotyp (AA/AB/BB)}"""
-    genotyper = {}
     with open(path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        markor_kolumner = [k for k in reader.fieldnames if k != "djur_id"]
-        for rad in reader:
-            genotyper[rad["djur_id"]] = {m: rad[m] for m in markor_kolumner}
-    return genotyper
+        return parse_genotyper(f.read())
+
+
+def parse_fenotyper(csv_text: str, kolumn: str = "fcr") -> dict[str, float]:
+    """Som las_fenotyper, men fran en CSV-strang istallet for en fil pa
+    disk - anvands av webb-API:t for uppladdad/inklistrad CSV-data."""
+    fenotyper = {}
+    reader = csv.DictReader(io.StringIO(csv_text))
+    if kolumn not in (reader.fieldnames or []):
+        raise ValueError(f"Kolumnen '{kolumn}' finns inte - tillgangliga kolumner: {reader.fieldnames}")
+    for rad in reader:
+        fenotyper[rad["djur_id"]] = float(rad[kolumn])
+    return fenotyper
 
 
 def las_fenotyper(path: Path, kolumn: str = "fcr") -> dict[str, float]:
     """djur_id -> varde i angiven fenotyp-kolumn (standard "fcr", for
     bakatkompatibilitet med leksaksdatan). Byt kolumn for att lanka mot en
     annan fenotyp-CSV utan att andra sjalva lasfunktionen."""
-    fenotyper = {}
     with open(path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        if kolumn not in (reader.fieldnames or []):
-            raise ValueError(
-                f"Kolumnen '{kolumn}' finns inte i {path.name} - "
-                f"tillgangliga kolumner: {reader.fieldnames}"
-            )
-        for rad in reader:
-            fenotyper[rad["djur_id"]] = float(rad[kolumn])
-    return fenotyper
+        return parse_fenotyper(f.read(), kolumn)
 
 
 def medel(varden: list[float]) -> float:

@@ -1,12 +1,22 @@
 """
-Vercel serverless function exposing candidate_gene_dossier.gather_dossier as
-a web API for the interactive demo (see index.html).
+Vercel serverless function exposing the gös in-silico breeding pipeline as
+a web API for the interactive demo (see index.html): candidate_gene_dossier
+.gather_dossier (Del 1) and ocs.kor_avelspipeline (Del 2 - marker/phenotype
+association -> breeding value -> GRM -> OCS pairing -> F-projection).
+
+/api/gene_dossier and /api/breeding are both served from this single
+handler class, not two separate files, because this project's Vercel
+Python build (pyproject.toml-driven, declares its one entrypoint via
+[tool.vercel]) only supports a single Python entrypoint per deployment -
+same constraint documented in the kmer-assembler repo this project was
+split out from (see project memory, project_gos_avelspipeline.md). The two
+routes stay independent HTTP requests either way (the browser fires
+separate fetch calls, so a slow breeding-pipeline run can't block a gene
+lookup in flight).
 
 Standalone project - split out from the "kmer-assembler" repo 2026-09-02
-because that repo's Vercel deployment only supports one Python entrypoint,
-which forced this gene-dossier lookup and the unrelated Trinity-like
-assembly pipeline demo onto the same page. See project memory
-(project_gos_avelspipeline.md) for why.
+because that repo's Vercel deployment forced this gene-dossier lookup and
+the unrelated Trinity-like assembly pipeline demo onto the same page.
 """
 import json
 import sys
@@ -16,6 +26,8 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from candidate_gene_dossier import BRIDGE_SPECIES, gather_dossier
+from marker_fenotyp_koppling import parse_fenotyper, parse_genotyper
+from ocs import ANTAL_KANDIDATER, GENERATIONER, SLAKTSKAP_TROSKEL, kor_avelspipeline
 
 
 class handler(BaseHTTPRequestHandler):
@@ -29,6 +41,12 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
+        if self.path.startswith("/api/breeding"):
+            self._handle_breeding()
+        else:
+            self._handle_gene_dossier()
+
+    def _handle_gene_dossier(self):
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length)
 
@@ -62,6 +80,47 @@ class handler(BaseHTTPRequestHandler):
             result = {"error": str(exc)}
             status = 400
 
+        self._send_json(result, status)
+
+    def _handle_breeding(self):
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length)
+
+        try:
+            payload = json.loads(body or b"{}")
+            genotyp_csv = payload.get("genotyp_csv")
+            fenotyp_csv = payload.get("fenotyp_csv")
+            if not genotyp_csv or not fenotyp_csv:
+                raise ValueError("genotyp_csv and fenotyp_csv (CSV text) are required")
+
+            fenotyp_kolumn = str(payload.get("fenotyp_kolumn") or "fcr").strip()
+            antal_kandidater = int(payload.get("antal_kandidater", ANTAL_KANDIDATER))
+            slaktskap_troskel = float(payload.get("slaktskap_troskel", SLAKTSKAP_TROSKEL))
+            generationer = int(payload.get("generationer", GENERATIONER))
+
+            genotyper = parse_genotyper(genotyp_csv)
+            fenotyper = parse_fenotyper(fenotyp_csv, fenotyp_kolumn)
+            if not genotyper:
+                raise ValueError("genotyp_csv innehöll inga rader")
+            if len(genotyper) < 2:
+                raise ValueError("behöver minst 2 djur med genotyp för att bilda par")
+            antal_kandidater = min(antal_kandidater, len(genotyper))
+
+            result = kor_avelspipeline(
+                genotyper,
+                fenotyper,
+                antal_kandidater=antal_kandidater,
+                slaktskap_troskel=slaktskap_troskel,
+                generationer=generationer,
+            )
+            status = 200
+        except Exception as exc:
+            result = {"error": str(exc)}
+            status = 400
+
+        self._send_json(result, status)
+
+    def _send_json(self, result: dict, status: int) -> None:
         response = json.dumps(result).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")

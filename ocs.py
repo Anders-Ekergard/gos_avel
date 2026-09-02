@@ -111,66 +111,122 @@ def f_prognos(medel_f_idag: float, generationer: int, ne: int) -> list[float]:
     return prognos
 
 
+def kor_avelspipeline(
+    genotyper: dict[str, dict[str, str]],
+    fenotyper: dict[str, float],
+    antal_kandidater: int = ANTAL_KANDIDATER,
+    slaktskap_troskel: float = SLAKTSKAP_TROSKEL,
+    generationer: int = GENERATIONER,
+) -> dict:
+    """Kor hela Del 2-kedjan (avelsvarde -> GRM/genomisk likhet ->
+    OCS-parforslag -> F-prognos) och returnerar strukturerad data, utan
+    att skriva ut nagot.
+
+    Ren datainsamlingsfunktion - delad av CLI:t (main) och webb-API:t,
+    samma monster som candidate_gene_dossier.gather_dossier, sa de tva
+    ytorna aldrig kan divergera i vad de faktiskt rapporterar."""
+    effekter = markor_effekter(genotyper, fenotyper)
+    varden = berakna_avelsvarden(genotyper, effekter)
+
+    kandidater = sorted(varden, key=lambda d: varden[d])[:antal_kandidater]
+
+    likhetsmatris = {
+        f"{a}|{b}": genomisk_likhet(genotyper, a, b)
+        for a, b in combinations(kandidater, 2)
+    }
+
+    par = foresla_par(kandidater, genotyper, varden, slaktskap_troskel)
+    ocs_medel_f = sum(likhet for _, _, likhet in par) / len(par)
+
+    naiva_par = naiv_parning(kandidater, varden)
+    naiv_medel_f = sum(genomisk_likhet(genotyper, a, b) for a, b in naiva_par) / len(naiva_par)
+
+    ne = len(par) * 2
+    prognos = f_prognos(ocs_medel_f, generationer, ne)
+
+    return {
+        "markor_effekter": {
+            m: {"effekt": e["effekt"], "additiv_avvikelse": e["additiv_avvikelse"]}
+            for m, e in effekter.items()
+        },
+        "avelsvarden": [
+            {"djur": d, "avelsvarde": varden[d]} for d in sorted(varden, key=lambda d: varden[d])
+        ],
+        "kandidater": kandidater,
+        "likhetsmatris": likhetsmatris,
+        "slaktskap_troskel": slaktskap_troskel,
+        "foreslagna_par": [
+            {
+                "a": a,
+                "b": b,
+                "f_proxy": likhet,
+                "over_troskel": likhet > slaktskap_troskel,
+                "avelsvarde_a": varden[a],
+                "avelsvarde_b": varden[b],
+            }
+            for a, b, likhet in par
+        ],
+        "ocs_medel_f": ocs_medel_f,
+        "naiv_medel_f": naiv_medel_f,
+        "ne": ne,
+        "generationer": generationer,
+        "f_prognos": prognos,
+        "publicerad_referens": {
+            "f": PUBLICERAD_F,
+            "ne": PUBLICERAD_NE,
+            "sra_projekt": SRA_PROJECT_HALVSYSKON,
+        },
+    }
+
+
 def main():
     genotyper = las_genotyper(GENOTYP_CSV)
     fenotyper = las_fenotyper(FENOTYP_CSV)
 
-    effekter = markor_effekter(genotyper, fenotyper)
-    varden = berakna_avelsvarden(genotyper, effekter)
-
-    kandidater = sorted(varden, key=lambda d: varden[d])[:ANTAL_KANDIDATER]
+    resultat = kor_avelspipeline(genotyper, fenotyper)
 
     print(f"--- {ANTAL_KANDIDATER} avelskandidater (lägst avelsvärde = bäst) ---")
-    for djur in kandidater:
-        print(f"  {djur}: avelsvärde={varden[djur]:+.3f}")
+    for djur in resultat["kandidater"]:
+        varde = next(a["avelsvarde"] for a in resultat["avelsvarden"] if a["djur"] == djur)
+        print(f"  {djur}: avelsvärde={varde:+.3f}")
     print()
 
     print(f"--- Genomisk likhet mellan kandidaterna (tröskel: {SLAKTSKAP_TROSKEL}) ---")
-    for a, b in combinations(kandidater, 2):
-        likhet = genomisk_likhet(genotyper, a, b)
+    for par_namn, likhet in resultat["likhetsmatris"].items():
+        a, b = par_namn.split("|")
         flagga = "  <- över tröskeln" if likhet > SLAKTSKAP_TROSKEL else ""
         print(f"  {a} & {b}: {likhet:.2f}{flagga}")
     print()
 
-    par = foresla_par(kandidater, genotyper, varden)
-
     print("--- Föreslagna avelspar (OCS) ---")
-    for a, b, likhet in par:
+    for p in resultat["foreslagna_par"]:
         varning = ""
-        if likhet > SLAKTSKAP_TROSKEL:
+        if p["over_troskel"]:
             varning = "  <- ingen partner under tröskeln fanns bland återstående, minst släktskapsnära valdes"
         print(
-            f"  {a} x {b}  (F-proxy avkomma: {likhet:.2f}, "
-            f"avelsvärden: {varden[a]:+.3f} / {varden[b]:+.3f}){varning}"
+            f"  {p['a']} x {p['b']}  (F-proxy avkomma: {p['f_proxy']:.2f}, "
+            f"avelsvärden: {p['avelsvarde_a']:+.3f} / {p['avelsvarde_b']:+.3f}){varning}"
         )
     print()
 
-    ocs_medel_f = sum(likhet for _, _, likhet in par) / len(par)
-
-    naiva_par = naiv_parning(kandidater, varden)
-    naiv_medel_f = sum(
-        genomisk_likhet(genotyper, a, b) for a, b in naiva_par
-    ) / len(naiva_par)
-
     print("--- F-jämförelse: OCS vs naiv parning (bara efter avelsvärde) ---")
-    print(f"  OCS medel-F denna generation:  {ocs_medel_f:.3f}")
-    print(f"  Naiv medel-F denna generation: {naiv_medel_f:.3f}")
-    if naiv_medel_f > 0:
-        print(f"  -> OCS sänker snittet med {(naiv_medel_f - ocs_medel_f) / naiv_medel_f:.0%}")
+    print(f"  OCS medel-F denna generation:  {resultat['ocs_medel_f']:.3f}")
+    print(f"  Naiv medel-F denna generation: {resultat['naiv_medel_f']:.3f}")
+    if resultat["naiv_medel_f"] > 0:
+        minskning = (resultat["naiv_medel_f"] - resultat["ocs_medel_f"]) / resultat["naiv_medel_f"]
+        print(f"  -> OCS sänker snittet med {minskning:.0%}")
     print()
 
-    ne = len(par) * 2
-    prognos = f_prognos(ocs_medel_f, GENERATIONER, ne)
-
-    print(f"--- F-prognos, OCS-strategin upprepad (Ne~{ne}) ---")
-    for generation, f in enumerate(prognos, start=1):
+    print(f"--- F-prognos, OCS-strategin upprepad (Ne~{resultat['ne']}) ---")
+    for generation, f in enumerate(resultat["f_prognos"], start=1):
         print(f"  Generation +{generation}: F~{f:.3f}")
     print()
     print("OBS: grov trend (konstant Ne, ingen faktisk simulering av framtida")
     print("genotyper) - se docstring för f_prognos för antaganden.")
     print()
+    ref = resultat["publicerad_referens"]
     print(f"Jämförelsepunkt (riktig data, ej denna leksaksdata): en publicerad studie på")
-    print(f"gös-halvsyskon (SRA {SRA_PROJECT_HALVSYSKON}) fann F={PUBLICERAD_F}, Ne={PUBLICERAD_NE}.")
+    print(f"gös-halvsyskon (SRA {ref['sra_projekt']}) fann F={ref['f']}, Ne={ref['ne']}.")
 
 
 if __name__ == "__main__":

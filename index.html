@@ -31,16 +31,18 @@
   p { color: var(--text-muted); max-width: 65ch; }
   p:first-of-type { font-size: 1.05rem; }
   label { display: block; margin-top: 0.85rem; font-weight: 700; font-size: 0.85rem; letter-spacing: 0.02em; text-transform: uppercase; color: var(--text); }
-  input[type=text] {
+  input[type=text], input[type=number], textarea {
     font-family: "IBM Plex Mono", monospace;
     border: 1px solid var(--border);
     border-radius: 0;
     padding: 0.5rem;
     background: #fff;
     color: var(--text);
-    width: 16rem;
     margin-top: 0.35rem;
   }
+  input[type=text] { width: 16rem; }
+  input[type=number] { width: 6rem; }
+  textarea { width: 100%; height: 8rem; display: block; }
   button {
     display: block;
     margin-top: 1.25rem; padding: 0.6rem 1.75rem;
@@ -65,6 +67,15 @@
     border-radius: 3px;
     font-size: 0.92em;
   }
+  .section-divider {
+    margin-top: 3.5rem;
+    padding-top: 2rem;
+    border-top: 4px solid var(--ebi-blue);
+  }
+  table { border-collapse: collapse; width: 100%; font-size: 0.85rem; margin-top: 0.5rem; }
+  th, td { border: 1px solid var(--border); padding: 0.4rem 0.6rem; text-align: left; }
+  th { background: var(--ebi-blue); color: #fff; font-weight: 500; }
+  tr:nth-child(even) td { background: var(--bg-tint); }
 </style>
 </head>
 <body>
@@ -79,6 +90,74 @@
   <button id="lookupGene">Look up gene</button>
 
   <div id="geneDossierOutput"></div>
+
+  <div class="section-divider">
+    <h2>Breeding pipeline: marker association &#8594; breeding value &#8594; GRM &#8594; OCS pairing</h2>
+    <p>Paste or edit genotype (<code class="g">djur_id</code> + marker columns, genotypes coded <code class="g">AA</code>/<code class="g">AB</code>/<code class="g">BB</code>) and phenotype (<code class="g">djur_id</code> + trait column) CSVs. Runs the full chain: additive marker-effect estimation, per-individual breeding value, pairwise genomic similarity (a simple identity-by-state GRM proxy), OCS-style pairing that avoids the most related candidates, and a multi-generation inbreeding projection. Source: <code class="g">marker_fenotyp_koppling.py</code> &#8594; <code class="g">avelsvarde.py</code> &#8594; <code class="g">ocs.py</code>.</p>
+    <p><em>Toy data preloaded below (20 individuals, 3 markers, feed-conversion-ratio phenotype) - illustrates the method, not a claim about real pikeperch. Paste your own data to try it on something else.</em></p>
+
+    <label for="genotypCsv">Genotype CSV</label>
+    <textarea id="genotypCsv">djur_id,markor_A,markor_B,markor_C
+R1,BB,AA,AB
+R2,AA,BB,AA
+R3,AA,BB,AA
+R4,BB,AA,AB
+R5,AB,BB,AA
+R6,AA,AA,AA
+R7,AA,BB,AB
+R8,AA,BB,AA
+R9,BB,BB,AB
+R10,AA,BB,AB
+R11,BB,AB,BB
+R12,BB,AA,AB
+R13,BB,AB,AA
+R14,AA,BB,BB
+R15,BB,AB,AB
+R16,AB,AA,BB
+R17,AA,AA,AA
+R18,AA,BB,AB
+R19,AA,AB,AA
+R20,AA,AB,BB</textarea>
+
+    <label for="fenotypCsv">Phenotype CSV</label>
+    <textarea id="fenotypCsv">djur_id,fcr
+R1,2.04
+R2,1.34
+R3,1.42
+R4,2.06
+R5,1.51
+R6,1.17
+R7,1.35
+R8,1.38
+R9,2.25
+R10,1.41
+R11,2.21
+R12,2.06
+R13,2.09
+R14,1.4
+R15,2.0
+R16,1.56
+R17,1.35
+R18,1.36
+R19,1.36
+R20,1.17</textarea>
+
+    <label for="fenotypKolumn">Phenotype column (lower = better; e.g. feed conversion ratio)</label>
+    <input type="text" id="fenotypKolumn" value="fcr">
+
+    <label for="antalKandidater">Breeding candidates (top N by breeding value)</label>
+    <input type="number" id="antalKandidater" value="8" min="2">
+
+    <label for="slaktskapTroskel">Relatedness threshold (avoid pairing above this)</label>
+    <input type="number" id="slaktskapTroskel" value="0.7" min="0" max="1" step="0.05">
+
+    <label for="generationer">Generations to project</label>
+    <input type="number" id="generationer" value="5" min="1" max="20">
+
+    <button id="runBreeding">Run breeding pipeline</button>
+
+    <div id="breedingOutput"></div>
+  </div>
 
 <script>
 const escapeHtml = (s) => s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
@@ -142,6 +221,91 @@ document.getElementById('lookupGene').addEventListener('click', async () => {
       <p>SRA RNA-seq records: ${data.sra_rna_seq_count} &middot; GEO datasets: ${data.geo_dataset_count}</p>
       <h3>EVA (variant archive)</h3>
       <pre>${escapeHtml(evaLines)}</pre>
+    `;
+  } catch (err) {
+    output.innerHTML = `<p class="error">Error: ${escapeHtml(err.message)}</p>`;
+  }
+});
+
+document.getElementById('runBreeding').addEventListener('click', async () => {
+  const output = document.getElementById('breedingOutput');
+  output.innerHTML = '<p>Running...</p>';
+
+  try {
+    const res = await fetch('/api/breeding', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        genotyp_csv: document.getElementById('genotypCsv').value,
+        fenotyp_csv: document.getElementById('fenotypCsv').value,
+        fenotyp_kolumn: document.getElementById('fenotypKolumn').value.trim(),
+        antal_kandidater: Number(document.getElementById('antalKandidater').value),
+        slaktskap_troskel: Number(document.getElementById('slaktskapTroskel').value),
+        generationer: Number(document.getElementById('generationer').value),
+      })
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      output.innerHTML = `<p class="error">Error: ${escapeHtml(data.error || res.statusText)}</p>`;
+      return;
+    }
+
+    const markorRows = Object.entries(data.markor_effekter).map(([markor, e]) => {
+      const avvikelse = e.additiv_avvikelse === null ? '-' : e.additiv_avvikelse.toFixed(3);
+      const varning = e.additiv_avvikelse !== null && Math.abs(e.additiv_avvikelse) > 0.15
+        ? ' &larr; heterozygote deviates from an additive model, use with caution'
+        : '';
+      return `<tr><td>${escapeHtml(markor)}</td><td>${e.effekt >= 0 ? '+' : ''}${e.effekt.toFixed(3)}</td><td>${avvikelse}${varning}</td></tr>`;
+    }).join('');
+
+    const avelsvardenRows = data.avelsvarden.map(a =>
+      `<tr><td>${escapeHtml(a.djur)}</td><td>${a.avelsvarde >= 0 ? '+' : ''}${a.avelsvarde.toFixed(3)}</td></tr>`
+    ).join('');
+
+    const parRows = data.foreslagna_par.map(p => {
+      const varning = p.over_troskel
+        ? ' &larr; no partner under the threshold was available among the remaining candidates, least-related was chosen'
+        : '';
+      return `<tr><td>${escapeHtml(p.a)} &times; ${escapeHtml(p.b)}</td><td>${p.f_proxy.toFixed(2)}</td><td>${p.avelsvarde_a.toFixed(3)} / ${p.avelsvarde_b.toFixed(3)}</td><td>${varning}</td></tr>`;
+    }).join('');
+
+    const prognosLines = data.f_prognos.map((f, i) => `Generation +${i + 1}: F~${f.toFixed(3)}`).join('\n');
+
+    const minskning = data.naiv_medel_f > 0
+      ? ((data.naiv_medel_f - data.ocs_medel_f) / data.naiv_medel_f * 100).toFixed(0)
+      : null;
+
+    const ref = data.publicerad_referens;
+
+    output.innerHTML = `
+      <h3>Marker effects (additive model: AA vs BB)</h3>
+      <table>
+        <thead><tr><th>Marker</th><th>Effect / B allele</th><th>Heterozygote deviation from additive midpoint</th></tr></thead>
+        <tbody>${markorRows}</tbody>
+      </table>
+
+      <h3>Breeding values (${data.avelsvarden.length} animals, lower = better)</h3>
+      <table>
+        <thead><tr><th>Animal</th><th>Breeding value</th></tr></thead>
+        <tbody>${avelsvardenRows}</tbody>
+      </table>
+
+      <h3>Proposed breeding pairs (OCS, top ${data.kandidater.length} candidates, relatedness threshold ${data.slaktskap_troskel})</h3>
+      <table>
+        <thead><tr><th>Pair</th><th>F-proxy (offspring)</th><th>Breeding values</th><th></th></tr></thead>
+        <tbody>${parRows}</tbody>
+      </table>
+
+      <h3>F comparison: OCS vs naive pairing (breeding value only)</h3>
+      <p>OCS mean F this generation: <strong>${data.ocs_medel_f.toFixed(3)}</strong> &middot; naive mean F: <strong>${data.naiv_medel_f.toFixed(3)}</strong>${minskning !== null ? ` &middot; OCS lowers it by ${minskning}%` : ''}</p>
+
+      <h3>F projection, OCS strategy repeated (Ne&asymp;${data.ne})</h3>
+      <pre>${escapeHtml(prognosLines)}</pre>
+      <p><em>Rough trend (constant Ne assumed, no actual simulation of future genotypes) - see f_prognos() docstring for assumptions.</em></p>
+
+      <h3>Reference point (real data, not this toy dataset)</h3>
+      <p>A published study on real pikeperch half-sib families (SRA <code class="g">${escapeHtml(ref.sra_projekt)}</code>) found F=${ref.f}, Ne=${ref.ne}.</p>
     `;
   } catch (err) {
     output.innerHTML = `<p class="error">Error: ${escapeHtml(err.message)}</p>`;
