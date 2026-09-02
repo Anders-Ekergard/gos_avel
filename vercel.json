@@ -1,0 +1,8 @@
+{
+  "functions": {
+    "api/gene_dossier.py": {
+      "includeFiles": "{genotyper_exempel.csv,fenotyper_exempel.csv,index.html}",
+      "maxDuration": 30
+    }
+  }
+}

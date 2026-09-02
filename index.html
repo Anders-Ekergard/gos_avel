@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gös candidate-gene dossier</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ebi-blue: #3b6fb6;
+    --ebi-blue-dark: #2d5690;
+    --text: #1a1c1a;
+    --text-muted: #55584f;
+    --border: #b6b8b3;
+    --bg-tint: #f4f5f2;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "IBM Plex Sans", Helvetica, Arial, system-ui, sans-serif;
+    color: var(--text);
+    background: #ffffff;
+    max-width: 900px;
+    margin: 2rem auto;
+    padding: 0 1rem;
+    line-height: 1.55;
+  }
+  h1 { font-size: 2.25rem; font-weight: 700; margin: 0 0 0.5rem; letter-spacing: -0.01em; }
+  h2 { font-size: 1.35rem; font-weight: 500; color: var(--text); border-bottom: 2px solid var(--ebi-blue); padding-bottom: 0.35rem; margin: 0 0 0.75rem; }
+  h3 { font-size: 1.05rem; font-weight: 500; color: var(--ebi-blue-dark); margin: 1.25rem 0 0.4rem; }
+  p { color: var(--text-muted); max-width: 65ch; }
+  p:first-of-type { font-size: 1.05rem; }
+  label { display: block; margin-top: 0.85rem; font-weight: 700; font-size: 0.85rem; letter-spacing: 0.02em; text-transform: uppercase; color: var(--text); }
+  input[type=text] {
+    font-family: "IBM Plex Mono", monospace;
+    border: 1px solid var(--border);
+    border-radius: 0;
+    padding: 0.5rem;
+    background: #fff;
+    color: var(--text);
+    width: 16rem;
+    margin-top: 0.35rem;
+  }
+  button {
+    display: block;
+    margin-top: 1.25rem; padding: 0.6rem 1.75rem;
+    font-family: inherit; font-size: 0.95rem; font-weight: 500;
+    border-radius: 0; border: 3px solid var(--ebi-blue);
+    background: var(--ebi-blue); color: #fff; cursor: pointer;
+  }
+  button:hover { background: var(--ebi-blue-dark); border-color: var(--ebi-blue-dark); }
+  section { margin-top: 2.5rem; }
+  pre {
+    background: var(--bg-tint); border-left: 3px solid var(--ebi-blue);
+    padding: 0.85rem 1rem; overflow-x: auto; white-space: pre-wrap; word-break: break-all;
+    font-family: "IBM Plex Mono", monospace; font-size: 0.85rem; color: var(--text);
+  }
+  .error { color: #b00020; font-weight: 700; }
+  .placeholder { color: var(--text-muted); font-style: italic; }
+  em { color: var(--text-muted); font-style: italic; }
+  code.g {
+    font-family: "IBM Plex Mono", monospace;
+    background: var(--bg-tint);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 0.92em;
+  }
+</style>
+</head>
+<body>
+  <h1>Gös candidate-gene dossier</h1>
+  <p>Screens a gene symbol against UniProt, Ensembl, NCBI SRA/GEO and EVA for pikeperch (<em>Sander lucioperca</em>) and Nile tilapia (<em>Oreochromis niloticus</em>, a phylogenetic bridge species closer to pikeperch than the zebrafish most fish functional-genetics literature is based on) - to see what's already publicly known before planning any wet-lab work or synteny analysis. Part of an in-silico pikeperch breeding pipeline (candidate genes &#8594; marker/phenotype association &#8594; GRM/OCS breeding-value optimization); this page covers the candidate-gene step. Source: <code class="g">candidate_gene_dossier.py</code>.</p>
+
+  <p>Try <code class="g">socs1a</code>, <code class="g">mstnb</code>, <code class="g">igf1</code>, <code class="g">igf2</code>, or <code class="g">ghr</code> - all already confirmed to exist for pikeperch.</p>
+
+  <label for="geneSymbol">Gene symbol</label>
+  <input type="text" id="geneSymbol" value="socs1a" placeholder="e.g. mstnb">
+
+  <button id="lookupGene">Look up gene</button>
+
+  <div id="geneDossierOutput"></div>
+
+<script>
+const escapeHtml = (s) => s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+document.getElementById('lookupGene').addEventListener('click', async () => {
+  const geneSymbol = document.getElementById('geneSymbol').value.trim();
+  const output = document.getElementById('geneDossierOutput');
+
+  if (!geneSymbol) {
+    output.innerHTML = '<p class="error">Enter a gene symbol first.</p>';
+    return;
+  }
+
+  output.innerHTML = '<p>Looking up...</p>';
+
+  try {
+    const res = await fetch('/api/gene_dossier', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gene_symbol: geneSymbol })
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      output.innerHTML = `<p class="error">Error: ${escapeHtml(data.error || res.statusText)}</p>`;
+      return;
+    }
+
+    const speciesHtml = data.species.map(sp => {
+      if (!sp.hit_count) {
+        return `<h3>${escapeHtml(sp.organism)}</h3><p class="placeholder">No UniProt hits.</p>`;
+      }
+
+      const paralogLines = Object.entries(sp.paralogs).map(([gene, count]) =>
+        `${gene}: ${typeof count === 'number' ? count + ' paralog(s) (Ensembl Compara - may include the whole gene family, not just recent duplicates)' : count}`
+      ).join('\n');
+
+      const isoformNote = sp.isoform_warning
+        ? '<p><em>Multiple UniProt entries share one Ensembl gene - likely splice isoforms of the same gene, not separate paralogs.</em></p>'
+        : '';
+      const broadenedNote = sp.broadened_search
+        ? `<p><em>Exact symbol match found nothing - broadened to the a/b teleost-paralog suffix pattern. Actually matched: ${escapeHtml(sp.matched_gene_names.join(', '))}.</em></p>`
+        : '';
+
+      return `
+        <h3>${escapeHtml(sp.organism)}</h3>
+        <p>${sp.hit_count} UniProt hit(s), ${sp.unique_ensembl_genes.length} unique Ensembl gene(s)</p>
+        ${isoformNote}
+        ${broadenedNote}
+        <pre>${escapeHtml(paralogLines) || '(no Ensembl cross-reference to look up paralogs from)'}</pre>
+      `;
+    }).join('');
+
+    const evaLines = Object.entries(data.eva_status)
+      .map(([organism, registered]) => `${organism}: ${registered ? 'registered' : 'not found'}`)
+      .join('\n');
+
+    output.innerHTML = `
+      ${speciesHtml}
+      <h3>Public sequence data (all species above, all tissues)</h3>
+      <p>SRA RNA-seq records: ${data.sra_rna_seq_count} &middot; GEO datasets: ${data.geo_dataset_count}</p>
+      <h3>EVA (variant archive)</h3>
+      <pre>${escapeHtml(evaLines)}</pre>
+    `;
+  } catch (err) {
+    output.innerHTML = `<p class="error">Error: ${escapeHtml(err.message)}</p>`;
+  }
+});
+</script>
+</body>
+</html>
