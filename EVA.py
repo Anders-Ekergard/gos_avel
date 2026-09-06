@@ -1,53 +1,53 @@
 """
-Testskript: finns räkor (t.ex. Litopenaeus vannamei) i EVA (European Variation Archive)?
-Kör: python eva_rakor_test.py
+Test script: is shrimp (e.g. Litopenaeus vannamei) registered in EVA (European Variation Archive)?
+Run: python EVA.py
 """
 
 import requests
 
 BASE = "https://www.ebi.ac.uk/eva/webservices/rest/v1"
 
-# Sökord vi letar efter i art- och studienamn
-SOKORD = list(input("Ange sökord (kommaseparerade): ").split(","))  #["shrimp", "prawn", "penaeus", "litopenaeus", "vannamei", "monodon"]
+# Search terms we're looking for in species and study names
+SEARCH_TERMS = list(input("Enter search terms (comma-separated): ").split(","))  #["shrimp", "prawn", "penaeus", "litopenaeus", "vannamei", "monodon"]
 
 
-def matchar(text):
+def matches(text):
     text = (text or "").lower()
-    return any(ord_ in text for ord_ in SOKORD)
+    return any(term in text for term in SEARCH_TERMS)
 
 
-def sok_arter():
-    print("== Söker i artlistan ==")
+def search_species():
+    print("== Searching the species list ==")
     r = requests.get(f"{BASE}/meta/species/list", timeout=30)
     r.raise_for_status()
-    arter = r.json().get("response", [{}])[0].get("result", [])
-    traff = [a for a in arter if matchar(a.get("taxonomyScientificName", "")) or matchar(a.get("taxonomyCommonName", ""))]
-    if traff:
-        for a in traff:
+    species = r.json().get("response", [{}])[0].get("result", [])
+    hits = [a for a in species if matches(a.get("taxonomyScientificName", "")) or matches(a.get("taxonomyCommonName", ""))]
+    if hits:
+        for a in hits:
             print(" -", a.get("taxonomyScientificName"), "|", a.get("taxonomyCode"), a.get("assemblyCode"))
     else:
-        print(" Inga räk-arter hittade i artlistan.")
-    return traff
+        print(" No shrimp species found in the species list.")
+    return hits
 
 
-def sok_studier():
-    print("\n== Söker bland alla registrerade studier ==")
+def search_studies():
+    print("\n== Searching all registered studies ==")
     r = requests.get(f"{BASE}/meta/studies/all", timeout=30)
     r.raise_for_status()
-    studier = r.json().get("response", [{}])[0].get("result", [])
-    traff = [s for s in studier if matchar(s.get("name", "")) or matchar(s.get("description", ""))]
-    if traff:
-        for s in traff:
+    studies = r.json().get("response", [{}])[0].get("result", [])
+    hits = [s for s in studies if matches(s.get("name", "")) or matches(s.get("description", ""))]
+    if hits:
+        for s in hits:
             print(" -", s.get("id"), "|", s.get("name"))
     else:
-        print(" Inga räk-relaterade studier hittade bland studienamn/beskrivningar.")
-    return traff
+        print(" No shrimp-related studies found among study names/descriptions.")
+    return hits
 
 
 if __name__ == "__main__":
-    arter = sok_arter()
-    studier = sok_studier()
+    species = search_species()
+    studies = search_studies()
 
-    print("\n== Resultat ==")
-    print(f"Räk-arter hittade: {len(arter)}")
-    print(f"Räk-studier hittade: {len(studier)}")
+    print("\n== Results ==")
+    print(f"Shrimp species found: {len(species)}")
+    print(f"Shrimp studies found: {len(studies)}")

@@ -93,11 +93,11 @@
 
   <div class="section-divider">
     <h2>Breeding pipeline: marker association &#8594; breeding value &#8594; GRM &#8594; OCS pairing</h2>
-    <p>Paste or edit genotype (<code class="g">djur_id</code> + marker columns, genotypes coded <code class="g">AA</code>/<code class="g">AB</code>/<code class="g">BB</code>) and phenotype (<code class="g">djur_id</code> + trait column) CSVs. Runs the full chain: additive marker-effect estimation, per-individual breeding value, pairwise genomic similarity (a simple identity-by-state GRM proxy), OCS-style pairing that avoids the most related candidates, and a multi-generation inbreeding projection. Source: <code class="g">marker_fenotyp_koppling.py</code> &#8594; <code class="g">avelsvarde.py</code> &#8594; <code class="g">ocs.py</code>.</p>
+    <p>Paste or edit genotype (<code class="g">animal_id</code> + marker columns, genotypes coded <code class="g">AA</code>/<code class="g">AB</code>/<code class="g">BB</code>) and phenotype (<code class="g">animal_id</code> + trait column) CSVs. Runs the full chain: additive marker-effect estimation, per-individual breeding value, pairwise genomic similarity (a simple identity-by-state GRM proxy), OCS-style pairing that avoids the most related candidates, and a multi-generation inbreeding projection. Source: <code class="g">marker_phenotype_association.py</code> &#8594; <code class="g">breeding_values.py</code> &#8594; <code class="g">ocs.py</code>.</p>
     <p><em>Toy data preloaded below (20 individuals, 3 markers, feed-conversion-ratio phenotype) - illustrates the method, not a claim about real pikeperch. Paste your own data to try it on something else.</em></p>
 
-    <label for="genotypCsv">Genotype CSV</label>
-    <textarea id="genotypCsv">djur_id,markor_A,markor_B,markor_C
+    <label for="genotypeCsv">Genotype CSV</label>
+    <textarea id="genotypeCsv">animal_id,marker_A,marker_B,marker_C
 R1,BB,AA,AB
 R2,AA,BB,AA
 R3,AA,BB,AA
@@ -119,8 +119,8 @@ R18,AA,BB,AB
 R19,AA,AB,AA
 R20,AA,AB,BB</textarea>
 
-    <label for="fenotypCsv">Phenotype CSV</label>
-    <textarea id="fenotypCsv">djur_id,fcr
+    <label for="phenotypeCsv">Phenotype CSV</label>
+    <textarea id="phenotypeCsv">animal_id,fcr
 R1,2.04
 R2,1.34
 R3,1.42
@@ -142,17 +142,17 @@ R18,1.36
 R19,1.36
 R20,1.17</textarea>
 
-    <label for="fenotypKolumn">Phenotype column (lower = better; e.g. feed conversion ratio)</label>
-    <input type="text" id="fenotypKolumn" value="fcr">
+    <label for="phenotypeColumn">Phenotype column (lower = better; e.g. feed conversion ratio)</label>
+    <input type="text" id="phenotypeColumn" value="fcr">
 
-    <label for="antalKandidater">Breeding candidates (top N by breeding value)</label>
-    <input type="number" id="antalKandidater" value="8" min="2">
+    <label for="numCandidates">Breeding candidates (top N by breeding value)</label>
+    <input type="number" id="numCandidates" value="8" min="2">
 
-    <label for="slaktskapTroskel">Relatedness threshold (avoid pairing above this)</label>
-    <input type="number" id="slaktskapTroskel" value="0.7" min="0" max="1" step="0.05">
+    <label for="relatednessThreshold">Relatedness threshold (avoid pairing above this)</label>
+    <input type="number" id="relatednessThreshold" value="0.7" min="0" max="1" step="0.05">
 
-    <label for="generationer">Generations to project</label>
-    <input type="number" id="generationer" value="5" min="1" max="20">
+    <label for="generations">Generations to project</label>
+    <input type="number" id="generations" value="5" min="1" max="20">
 
     <button id="runBreeding">Run breeding pipeline</button>
 
@@ -236,12 +236,12 @@ document.getElementById('runBreeding').addEventListener('click', async () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        genotyp_csv: document.getElementById('genotypCsv').value,
-        fenotyp_csv: document.getElementById('fenotypCsv').value,
-        fenotyp_kolumn: document.getElementById('fenotypKolumn').value.trim(),
-        antal_kandidater: Number(document.getElementById('antalKandidater').value),
-        slaktskap_troskel: Number(document.getElementById('slaktskapTroskel').value),
-        generationer: Number(document.getElementById('generationer').value),
+        genotype_csv: document.getElementById('genotypeCsv').value,
+        phenotype_csv: document.getElementById('phenotypeCsv').value,
+        phenotype_column: document.getElementById('phenotypeColumn').value.trim(),
+        num_candidates: Number(document.getElementById('numCandidates').value),
+        relatedness_threshold: Number(document.getElementById('relatednessThreshold').value),
+        generations: Number(document.getElementById('generations').value),
       })
     });
     const data = await res.json();
@@ -251,61 +251,61 @@ document.getElementById('runBreeding').addEventListener('click', async () => {
       return;
     }
 
-    const markorRows = Object.entries(data.markor_effekter).map(([markor, e]) => {
-      const avvikelse = e.additiv_avvikelse === null ? '-' : e.additiv_avvikelse.toFixed(3);
-      const varning = e.additiv_avvikelse !== null && Math.abs(e.additiv_avvikelse) > 0.15
+    const markerRows = Object.entries(data.marker_effects).map(([marker, e]) => {
+      const deviation = e.additive_deviation === null ? '-' : e.additive_deviation.toFixed(3);
+      const warning = e.additive_deviation !== null && Math.abs(e.additive_deviation) > 0.15
         ? ' &larr; heterozygote deviates from an additive model, use with caution'
         : '';
-      return `<tr><td>${escapeHtml(markor)}</td><td>${e.effekt >= 0 ? '+' : ''}${e.effekt.toFixed(3)}</td><td>${avvikelse}${varning}</td></tr>`;
+      return `<tr><td>${escapeHtml(marker)}</td><td>${e.effect >= 0 ? '+' : ''}${e.effect.toFixed(3)}</td><td>${deviation}${warning}</td></tr>`;
     }).join('');
 
-    const avelsvardenRows = data.avelsvarden.map(a =>
-      `<tr><td>${escapeHtml(a.djur)}</td><td>${a.avelsvarde >= 0 ? '+' : ''}${a.avelsvarde.toFixed(3)}</td></tr>`
+    const breedingValueRows = data.breeding_values.map(a =>
+      `<tr><td>${escapeHtml(a.animal)}</td><td>${a.breeding_value >= 0 ? '+' : ''}${a.breeding_value.toFixed(3)}</td></tr>`
     ).join('');
 
-    const parRows = data.foreslagna_par.map(p => {
-      const varning = p.over_troskel
+    const pairRows = data.proposed_pairs.map(p => {
+      const warning = p.over_threshold
         ? ' &larr; no partner under the threshold was available among the remaining candidates, least-related was chosen'
         : '';
-      return `<tr><td>${escapeHtml(p.a)} &times; ${escapeHtml(p.b)}</td><td>${p.f_proxy.toFixed(2)}</td><td>${p.avelsvarde_a.toFixed(3)} / ${p.avelsvarde_b.toFixed(3)}</td><td>${varning}</td></tr>`;
+      return `<tr><td>${escapeHtml(p.a)} &times; ${escapeHtml(p.b)}</td><td>${p.f_proxy.toFixed(2)}</td><td>${p.breeding_value_a.toFixed(3)} / ${p.breeding_value_b.toFixed(3)}</td><td>${warning}</td></tr>`;
     }).join('');
 
-    const prognosLines = data.f_prognos.map((f, i) => `Generation +${i + 1}: F~${f.toFixed(3)}`).join('\n');
+    const projectionLines = data.f_projection.map((f, i) => `Generation +${i + 1}: F~${f.toFixed(3)}`).join('\n');
 
-    const minskning = data.naiv_medel_f > 0
-      ? ((data.naiv_medel_f - data.ocs_medel_f) / data.naiv_medel_f * 100).toFixed(0)
+    const reduction = data.naive_mean_f > 0
+      ? ((data.naive_mean_f - data.ocs_mean_f) / data.naive_mean_f * 100).toFixed(0)
       : null;
 
-    const ref = data.publicerad_referens;
+    const ref = data.published_reference;
 
     output.innerHTML = `
       <h3>Marker effects (additive model: AA vs BB)</h3>
       <table>
         <thead><tr><th>Marker</th><th>Effect / B allele</th><th>Heterozygote deviation from additive midpoint</th></tr></thead>
-        <tbody>${markorRows}</tbody>
+        <tbody>${markerRows}</tbody>
       </table>
 
-      <h3>Breeding values (${data.avelsvarden.length} animals, lower = better)</h3>
+      <h3>Breeding values (${data.breeding_values.length} animals, lower = better)</h3>
       <table>
         <thead><tr><th>Animal</th><th>Breeding value</th></tr></thead>
-        <tbody>${avelsvardenRows}</tbody>
+        <tbody>${breedingValueRows}</tbody>
       </table>
 
-      <h3>Proposed breeding pairs (OCS, top ${data.kandidater.length} candidates, relatedness threshold ${data.slaktskap_troskel})</h3>
+      <h3>Proposed breeding pairs (OCS, top ${data.candidates.length} candidates, relatedness threshold ${data.relatedness_threshold})</h3>
       <table>
         <thead><tr><th>Pair</th><th>F-proxy (offspring)</th><th>Breeding values</th><th></th></tr></thead>
-        <tbody>${parRows}</tbody>
+        <tbody>${pairRows}</tbody>
       </table>
 
       <h3>F comparison: OCS vs naive pairing (breeding value only)</h3>
-      <p>OCS mean F this generation: <strong>${data.ocs_medel_f.toFixed(3)}</strong> &middot; naive mean F: <strong>${data.naiv_medel_f.toFixed(3)}</strong>${minskning !== null ? ` &middot; OCS lowers it by ${minskning}%` : ''}</p>
+      <p>OCS mean F this generation: <strong>${data.ocs_mean_f.toFixed(3)}</strong> &middot; naive mean F: <strong>${data.naive_mean_f.toFixed(3)}</strong>${reduction !== null ? ` &middot; OCS lowers it by ${reduction}%` : ''}</p>
 
       <h3>F projection, OCS strategy repeated (Ne&asymp;${data.ne})</h3>
-      <pre>${escapeHtml(prognosLines)}</pre>
-      <p><em>Rough trend (constant Ne assumed, no actual simulation of future genotypes) - see f_prognos() docstring for assumptions.</em></p>
+      <pre>${escapeHtml(projectionLines)}</pre>
+      <p><em>Rough trend (constant Ne assumed, no actual simulation of future genotypes) - see f_projection() docstring for assumptions.</em></p>
 
       <h3>Reference point (real data, not this toy dataset)</h3>
-      <p>A published study on real pikeperch half-sib families (SRA <code class="g">${escapeHtml(ref.sra_projekt)}</code>) found F=${ref.f}, Ne=${ref.ne}.</p>
+      <p>A published study on real pikeperch half-sib families (SRA <code class="g">${escapeHtml(ref.sra_project)}</code>) found F=${ref.f}, Ne=${ref.ne}.</p>
     `;
   } catch (err) {
     output.innerHTML = `<p class="error">Error: ${escapeHtml(err.message)}</p>`;

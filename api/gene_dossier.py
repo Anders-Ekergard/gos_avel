@@ -1,7 +1,7 @@
 """
-Vercel serverless function exposing the gös in-silico breeding pipeline as
+Vercel serverless function exposing the pikeperch in-silico breeding pipeline as
 a web API for the interactive demo (see index.html): candidate_gene_dossier
-.gather_dossier (Del 1) and ocs.kor_avelspipeline (Del 2 - marker/phenotype
+.gather_dossier (Part 1) and ocs.run_breeding_pipeline (Part 2 - marker/phenotype
 association -> breeding value -> GRM -> OCS pairing -> F-projection).
 
 /api/gene_dossier and /api/breeding are both served from this single
@@ -26,8 +26,8 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from candidate_gene_dossier import BRIDGE_SPECIES, gather_dossier
-from marker_fenotyp_koppling import parse_fenotyper, parse_genotyper
-from ocs import ANTAL_KANDIDATER, GENERATIONER, SLAKTSKAP_TROSKEL, kor_avelspipeline
+from marker_phenotype_association import parse_phenotypes, parse_genotypes
+from ocs import NUM_CANDIDATES, GENERATIONS, RELATEDNESS_THRESHOLD, run_breeding_pipeline
 
 
 class handler(BaseHTTPRequestHandler):
@@ -60,20 +60,22 @@ class handler(BaseHTTPRequestHandler):
                 str(s).strip() for s in payload.get("species", []) if str(s).strip()
             ]
             if not species_list:
-                # Kept short (1 art + bryggart = 2 st) med avsikt: varje extra
-                # art multiplicerar antalet nätverksanrop, och hela requesten
-                # måste rymmas inom Vercels 30s maxDuration (se vercel.json).
+                # Kept short (1 species + bridge species = 2) by design:
+                # each extra species multiplies the number of network
+                # calls, and the whole request must fit within Vercel's
+                # 30s maxDuration (see vercel.json).
                 species_list = ["Sander lucioperca"]
             if BRIDGE_SPECIES not in species_list:
                 species_list.append(BRIDGE_SPECIES)
 
-            # Kortare an CLI:ts standard-60s av samma skal - se
-            # gather_dossier/ensembl_paralog_count docstrings i
-            # candidate_gene_dossier.py. gather_dossier kor allt parallellt
-            # i trådar, sa 20s timeout hojer inte totala svarstiden linjart -
-            # en tidigare sekventiell 8s-variant timeoutade upprepat i
-            # produktion (annan natverksväg till Ensembl an lokalt testat),
-            # se historik i candidate_gene_dossier.py.
+            # Shorter than the CLI's default 60s for the same reason - see
+            # gather_dossier/ensembl_paralog_count docstrings in
+            # candidate_gene_dossier.py. gather_dossier runs everything in
+            # parallel across threads, so a 20s timeout doesn't raise the
+            # total response time linearly - an earlier sequential 8s
+            # variant timed out repeatedly in production (a different
+            # network path to Ensembl than tested locally), see history in
+            # candidate_gene_dossier.py.
             result = gather_dossier(gene_symbol, species_list, paralog_timeout=20)
             status = 200
         except Exception as exc:
@@ -88,30 +90,30 @@ class handler(BaseHTTPRequestHandler):
 
         try:
             payload = json.loads(body or b"{}")
-            genotyp_csv = payload.get("genotyp_csv")
-            fenotyp_csv = payload.get("fenotyp_csv")
-            if not genotyp_csv or not fenotyp_csv:
-                raise ValueError("genotyp_csv and fenotyp_csv (CSV text) are required")
+            genotype_csv = payload.get("genotype_csv")
+            phenotype_csv = payload.get("phenotype_csv")
+            if not genotype_csv or not phenotype_csv:
+                raise ValueError("genotype_csv and phenotype_csv (CSV text) are required")
 
-            fenotyp_kolumn = str(payload.get("fenotyp_kolumn") or "fcr").strip()
-            antal_kandidater = int(payload.get("antal_kandidater", ANTAL_KANDIDATER))
-            slaktskap_troskel = float(payload.get("slaktskap_troskel", SLAKTSKAP_TROSKEL))
-            generationer = int(payload.get("generationer", GENERATIONER))
+            phenotype_column = str(payload.get("phenotype_column") or "fcr").strip()
+            num_candidates = int(payload.get("num_candidates", NUM_CANDIDATES))
+            relatedness_threshold = float(payload.get("relatedness_threshold", RELATEDNESS_THRESHOLD))
+            generations = int(payload.get("generations", GENERATIONS))
 
-            genotyper = parse_genotyper(genotyp_csv)
-            fenotyper = parse_fenotyper(fenotyp_csv, fenotyp_kolumn)
-            if not genotyper:
-                raise ValueError("genotyp_csv innehöll inga rader")
-            if len(genotyper) < 2:
-                raise ValueError("behöver minst 2 djur med genotyp för att bilda par")
-            antal_kandidater = min(antal_kandidater, len(genotyper))
+            genotypes = parse_genotypes(genotype_csv)
+            phenotypes = parse_phenotypes(phenotype_csv, phenotype_column)
+            if not genotypes:
+                raise ValueError("genotype_csv contained no rows")
+            if len(genotypes) < 2:
+                raise ValueError("need at least 2 animals with genotype to form pairs")
+            num_candidates = min(num_candidates, len(genotypes))
 
-            result = kor_avelspipeline(
-                genotyper,
-                fenotyper,
-                antal_kandidater=antal_kandidater,
-                slaktskap_troskel=slaktskap_troskel,
-                generationer=generationer,
+            result = run_breeding_pipeline(
+                genotypes,
+                phenotypes,
+                num_candidates=num_candidates,
+                relatedness_threshold=relatedness_threshold,
+                generations=generations,
             )
             status = 200
         except Exception as exc:

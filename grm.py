@@ -1,6 +1,6 @@
-# 0 homozygot
-# 1 heterozygot
-# 2 homozygot alt
+# 0 homozygous
+# 1 heterozygous
+# 2 homozygous (alt)
 snp_marks: dict[str, dict[str, int]] = {
     "A": {"snp1": 2, "snp2": 1, "snp3": 0, "sp4": 2, "snp5": 1},
     "B": {"snp1": 2, "snp2": 1, "snp3": 2, "sp4": 2, "snp5": 1},

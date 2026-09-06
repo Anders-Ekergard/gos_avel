@@ -1,7 +1,7 @@
 {
   "functions": {
     "api/gene_dossier.py": {
-      "includeFiles": "{genotyper_exempel.csv,fenotyper_exempel.csv,index.html}",
+      "includeFiles": "{genotypes_example.csv,phenotypes_example.csv,index.html}",
       "maxDuration": 30
     }
   }

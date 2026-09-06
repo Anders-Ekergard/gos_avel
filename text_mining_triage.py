@@ -1,16 +1,16 @@
 """
-Text-mining-triage: soker PubMed/PubTator3 efter gener som samnamns med
-en fenotyp hos zebrafisk (Danio rerio - den fiskart med rikast funktionell
-litteratur), och kan valfritt utoka traffarna via STRINGs textmining-kanal
-samt KEGG-pathways (samma tva kallor som redan anvands for humana gener i
-pathway_mvp.py, har omskrivna for zebrafisk-organismkoder istallet for
-hsa/Homo sapiens).
+Text-mining triage: searches PubMed/PubTator3 for genes co-mentioned with
+a phenotype in zebrafish literature (Danio rerio - the fish species with
+the richest functional literature), and can optionally expand hits via
+STRING's text-mining channel plus KEGG pathways (the same two sources
+already used for human genes in pathway_mvp.py, rewritten here for
+zebrafish organism codes instead of hsa/Homo sapiens).
 
-Detta ersatter INTE manuell granskning - traffarna ar en startlista att
-verifiera (UniProt/Ensembl via candidate_gene_dossier.py) och klippa in
-i CANDIDATE_GENE_SETS for hand, en kategori i taget.
+This does NOT replace manual review - the hits are a starting list to
+verify (UniProt/Ensembl via candidate_gene_dossier.py) and paste into
+CANDIDATE_GENE_SETS by hand, one category at a time.
 
-Kor: python text_mining_triage.py
+Run: python text_mining_triage.py
 """
 
 import functools
@@ -24,44 +24,45 @@ PUBTATOR_BASE = "https://www.ncbi.nlm.nih.gov/research/pubtator3-api"
 STRING_BASE = "https://string-db.org/api"
 KEGG_BASE = "https://rest.kegg.jp"
 
-# Val av "brygg-art" for textmining: zebrafisk har overlagset mest
-# funktionell litteratur for fisk (se motivering i candidate_gene_dossier.py).
+# Choice of "bridge species" for text mining: zebrafish has by far the most
+# functional literature for fish (see rationale in candidate_gene_dossier.py).
 DISCOVERY_SPECIES = "Danio rerio"
-DISCOVERY_TAXON_ID = 7955       # NCBI taxon id, kravs av STRING
-DISCOVERY_KEGG_ORGANISM = "dre"  # KEGG:s organismkod for Danio rerio
+DISCOVERY_TAXON_ID = 7955       # NCBI taxon id, required by STRING
+DISCOVERY_KEGG_ORGANISM = "dre"  # KEGG's organism code for Danio rerio
 
-# Sokord per fenotypkategori - engelska, eftersom PubMed/PubTator ar
-# engelskspraktig litteratur. Nycklarna maste matcha CANDIDATE_GENE_SETS
-# i candidate_gene_dossier.py sa att traffar kan korsrefereras mot
-# redan kanda kandidater.
+# Search terms per phenotype category - English, since PubMed/PubTator is
+# English-language literature. The keys must match CANDIDATE_GENE_SETS in
+# candidate_gene_dossier.py so hits can be cross-referenced against
+# already-known candidates.
 PHENOTYPE_QUERY_TERMS: dict[str, list[str]] = {
-    "tillvaxt": ["growth rate", "feed conversion ratio", "muscle growth", "body weight"],
-    "kon": ["sex determination", "sex differentiation", "gonad development"],
-    "kottkvalitet": ["muscle fiber", "fillet quality", "flesh quality"],
-    "sjukdom_stress": ["hypoxia tolerance", "stress response", "disease resistance", "immune response"],
+    "growth": ["growth rate", "feed conversion ratio", "muscle growth", "body weight"],
+    "sex": ["sex determination", "sex differentiation", "gonad development"],
+    "meat_quality": ["muscle fiber", "fillet quality", "flesh quality"],
+    "disease_stress": ["hypoxia tolerance", "stress response", "disease resistance", "immune response"],
 }
 
-MAX_PMIDS_PER_TERM = 50       # tak per sokterm - triage, inte fullstandig litteraturgenomgang
-BIOCJSON_CHUNK_SIZE = 50      # antal PMIDs per annotations-anrop
-REQUEST_DELAY_SECONDS = 0.4   # artighetspaus mellan anrop (~3/sek, samma norm som NCBI E-utilities)
+MAX_PMIDS_PER_TERM = 50       # cap per search term - triage, not a full literature review
+BIOCJSON_CHUNK_SIZE = 50      # number of PMIDs per annotations call
+REQUEST_DELAY_SECONDS = 0.4   # politeness pause between calls (~3/sec, same norm as NCBI E-utilities)
 
 
 def _polite_pause() -> None:
-    """Enkel artighetspaus mellan anrop till PubTator3/STRING/KEGG - alla
-    tre ar mindre, publikt finansierade tjanster utan dokumenterad hard
-    rate-limit for den har typen av anrop; battre att vara snall."""
+    """Simple politeness pause between calls to PubTator3/STRING/KEGG - all
+    three are smaller, publicly funded services without a documented hard
+    rate limit for this kind of call; better to be polite."""
     time.sleep(REQUEST_DELAY_SECONDS)
 
 
-# --- PubTator3 (upptackt) ---------------------------------------------------
+# --- PubTator3 (discovery) ---------------------------------------------------
 
 def pubtator_search_pmids(query: str, max_results: int = MAX_PMIDS_PER_TERM) -> list[str]:
-    """Sok PubTator3 efter artiklar som matchar en fritextfraga
-    (t.ex. '"feed conversion ratio" Danio rerio'). Returnerar PMIDs.
+    """Search PubTator3 for articles matching a free-text query
+    (e.g. '"feed conversion ratio" Danio rerio'). Returns PMIDs.
 
-    OBS: PubTator3 har inte anropats fran det har repot tidigare - fältnamnen
-    nedan (`results`, `pmid`) ar basta-gissning fran offentlig dokumentation.
-    Verifiera empiriskt (print(r.json())) innan traffarna litas pa blint."""
+    NOTE: PubTator3 hasn't been called from this repo before - the field
+    names below (`results`, `pmid`) are a best guess from public
+    documentation. Verify empirically (print(r.json())) before trusting
+    the hits blindly."""
     pmids: list[str] = []
     page = 1
     while len(pmids) < max_results:
@@ -83,8 +84,8 @@ def pubtator_search_pmids(query: str, max_results: int = MAX_PMIDS_PER_TERM) -> 
 
 
 def pubtator_fetch_annotations(pmids: list[str]) -> list[dict]:
-    """Hamtar BioC-JSON med normaliserade gen/art-annoteringar for en
-    lista PMIDs, i klumpar om BIOCJSON_CHUNK_SIZE."""
+    """Fetches BioC JSON with normalized gene/species annotations for a
+    list of PMIDs, in chunks of BIOCJSON_CHUNK_SIZE."""
     documents: list[dict] = []
     for i in range(0, len(pmids), BIOCJSON_CHUNK_SIZE):
         chunk = pmids[i:i + BIOCJSON_CHUNK_SIZE]
@@ -98,8 +99,8 @@ def pubtator_fetch_annotations(pmids: list[str]) -> list[dict]:
 
 
 def extract_gene_mentions(documents: list[dict], taxon_id: int = DISCOVERY_TAXON_ID) -> list[dict]:
-    """Plockar ut Gene-annoteringar fran BioC-dokument, filtrerat till
-    dokument som ocksa har en Species-annotering som matchar taxon_id."""
+    """Picks out Gene annotations from BioC documents, filtered to
+    documents that also have a Species annotation matching taxon_id."""
     mentions: list[dict] = []
     for doc in documents:
         pmid = doc.get("pmid") or doc.get("id")
@@ -123,10 +124,11 @@ def extract_gene_mentions(documents: list[dict], taxon_id: int = DISCOVERY_TAXON
 
 
 def rank_gene_candidates(mentions: list[dict]) -> list[dict]:
-    """Aggregerar genmentions till en rankad kandidatlista: flest unika
-    PMIDs forst (bredare stod i litteraturen), sedan flest mentions totalt.
+    """Aggregates gene mentions into a ranked candidate list: most unique
+    PMIDs first (broader support in the literature), then most total
+    mentions.
 
-    OBS: samforekomst i litteratur ar korrelation, inte kausalitet - se
+    NOTE: co-occurrence in literature is correlation, not causation - see
     print_caveats()."""
     by_gene: dict[str, dict] = {}
     for m in mentions:
@@ -154,20 +156,20 @@ def rank_gene_candidates(mentions: list[dict]) -> list[dict]:
     return ranked
 
 
-def build_queries_for_category(kategori: str, extra_terms: list[str] | None = None) -> list[str]:
-    """En sokfraga per synonymterm (inte en enda kombinerad boolesk
-    fraga) - enklare att fa ratt utan att veta PubTator3s exakta
-    frag-syntax, och lattare att debugga term for term."""
-    terms = list(PHENOTYPE_QUERY_TERMS.get(kategori, []))
+def build_queries_for_category(category: str, extra_terms: list[str] | None = None) -> list[str]:
+    """One search query per synonym term (not a single combined boolean
+    query) - easier to get right without knowing PubTator3's exact query
+    syntax, and easier to debug term by term."""
+    terms = list(PHENOTYPE_QUERY_TERMS.get(category, []))
     if extra_terms:
         terms += extra_terms
     return [f'"{term}" {DISCOVERY_SPECIES}' for term in terms]
 
 
-def discover_candidates_for_category(kategori: str, extra_terms: list[str] | None = None) -> list[dict]:
-    """Full discovery-pipeline for en fenotypkategori: sok -> hamta
-    annoteringar -> filtrera -> rangordna."""
-    queries = build_queries_for_category(kategori, extra_terms)
+def discover_candidates_for_category(category: str, extra_terms: list[str] | None = None) -> list[dict]:
+    """Full discovery pipeline for a phenotype category: search -> fetch
+    annotations -> filter -> rank."""
+    queries = build_queries_for_category(category, extra_terms)
 
     all_pmids: list[str] = []
     for q in queries:
@@ -178,19 +180,19 @@ def discover_candidates_for_category(kategori: str, extra_terms: list[str] | Non
                 if p not in all_pmids:
                     all_pmids.append(p)
         except requests.exceptions.RequestException as e:
-            print(f"  '{q}': sokning misslyckades ({e.__class__.__name__})")
+            print(f"  '{q}': search failed ({e.__class__.__name__})")
 
     documents = pubtator_fetch_annotations(all_pmids)
     mentions = extract_gene_mentions(documents)
     return rank_gene_candidates(mentions)
 
 
-# --- STRING (utokning fran kand gen, textmining-kanalen) --------------------
+# --- STRING (expansion from a known gene, text-mining channel) --------------
 
 def string_get_string_id(gene_symbol: str, species_taxon_id: int = DISCOVERY_TAXON_ID) -> str | None:
-    """Slar upp STRINGs interna ID for en gensymbol - kravs av
-    interaction_partners (accepterar inte fria symboler direkt utan
-    risk for tvetydig matchning)."""
+    """Looks up STRING's internal ID for a gene symbol - required by
+    interaction_partners (doesn't accept free symbols directly, to avoid
+    ambiguous matching)."""
     params = {"identifiers": gene_symbol, "species": species_taxon_id, "limit": 1}
     r = requests.get(f"{STRING_BASE}/json/get_string_ids", params=params, timeout=30)
     r.raise_for_status()
@@ -206,9 +208,10 @@ def string_textmining_partners(
     min_tscore: float = 0.4,
     limit: int = 20,
 ) -> list[dict]:
-    """Funktionella partners till en kand gen, filtrerat till STRINGs
-    textmining-kanal (tscore) - dvs partners med stod i samforekomst-
-    litteratur, inte bara databas-/experimentbevis."""
+    """Functional partners of a known gene, filtered to STRING's
+    text-mining channel (tscore) - i.e. partners supported by
+    co-occurrence in the literature, not just database/experimental
+    evidence."""
     string_id = string_get_string_id(gene_symbol, species_taxon_id)
     if not string_id:
         return []
@@ -231,15 +234,15 @@ def string_textmining_partners(
     return result
 
 
-# --- KEGG (pathways for kand gen) -------------------------------------------
-# Samma tvasteg-metodik (Entrez -> gen-id, KEGG link/list) som redan anvands
-# for humana gener i pathway_mvp.py - har med "Danio rerio[orgn]"/"dre"
-# istallet for "Homo sapiens[orgn]"/"hsa".
+# --- KEGG (pathways for a known gene) ---------------------------------------
+# Same two-step method (Entrez -> gene id, KEGG link/list) already used
+# for human genes in pathway_mvp.py - here with "Danio rerio[orgn]"/"dre"
+# instead of "Homo sapiens[orgn]"/"hsa".
 
 @functools.lru_cache(maxsize=64)
 def resolve_kegg_gene_id(symbol: str, organism: str = DISCOVERY_SPECIES) -> str | None:
-    """Slar upp ett KEGG-gen-id (t.ex. 'dre:napp') via NCBI Entrez esearch,
-    samma eutils-tjanst som redan anvands i candidate_gene_dossier.py."""
+    """Looks up a KEGG gene id (e.g. 'dre:napp') via NCBI Entrez esearch,
+    the same eutils service already used in candidate_gene_dossier.py."""
     params = {"db": "gene", "term": f"{symbol}[sym] AND {organism}[orgn]", "retmode": "json"}
     r = requests.get(f"{EUTILS_BASE}/esearch.fcgi", params=params, timeout=30)
     r.raise_for_status()
@@ -248,8 +251,8 @@ def resolve_kegg_gene_id(symbol: str, organism: str = DISCOVERY_SPECIES) -> str 
 
 
 def parse_kegg_tsv(text: str) -> list[tuple[str, str]]:
-    """Tolkar KEGGs platta, tabbseparerade svarsformat ('nyckel\\tvarde'
-    per rad), delat av bade link- och list-operationerna."""
+    """Parses KEGG's flat, tab-separated response format ('key\\tvalue'
+    per line), shared by both the link and list operations."""
     pairs = []
     for line in text.strip().splitlines():
         if not line:
@@ -260,7 +263,7 @@ def parse_kegg_tsv(text: str) -> list[tuple[str, str]]:
 
 
 def fetch_kegg_pathway_ids(gene_id: str) -> list[str]:
-    """Vilka KEGG-pathways en gen tillhor."""
+    """Which KEGG pathways a gene belongs to."""
     r = requests.get(f"{KEGG_BASE}/link/pathway/{gene_id}", timeout=30)
     r.raise_for_status()
     return [pathway_id for _gene, pathway_id in parse_kegg_tsv(r.text)]
@@ -268,16 +271,16 @@ def fetch_kegg_pathway_ids(gene_id: str) -> list[str]:
 
 @functools.lru_cache(maxsize=8)
 def _fetch_kegg_pathway_list(organism: str) -> tuple[tuple[str, str], ...]:
-    """Hamtar och cachar en organisms fullstandiga pathway-id -> namn-lista
-    (samma svar oavsett vilken gen som utlost uppslaget)."""
+    """Fetches and caches an organism's full pathway id -> name list
+    (the same response regardless of which gene triggered the lookup)."""
     r = requests.get(f"{KEGG_BASE}/list/pathway/{organism}", timeout=30)
     r.raise_for_status()
     return tuple(parse_kegg_tsv(r.text))
 
 
 def fetch_kegg_pathway_names(pathway_ids: list[str], organism: str = DISCOVERY_KEGG_ORGANISM) -> dict[str, str]:
-    """Namn for KEGG-pathway-id:n (link-svaret ger bara id:n, list-svaret
-    behovs for namnen)."""
+    """Names for KEGG pathway ids (the link response only gives ids, the
+    list response is needed for the names)."""
     if not pathway_ids:
         return {}
     names_by_bare_id = dict(_fetch_kegg_pathway_list(organism))
@@ -289,9 +292,10 @@ def fetch_kegg_pathway_names(pathway_ids: list[str], organism: str = DISCOVERY_K
 
 
 def kegg_pathways_for_gene(gene_symbol: str) -> list[dict]:
-    """Hognivafunktion: gensymbol -> lista KEGG-pathways ({'id', 'name'})
-    for zebrafisk. Tom lista om Entrez inte hittar genen (t.ex. fel
-    stavning/synonym som inte matchar Entrez-index) - kraschar inte."""
+    """High-level function: gene symbol -> list of KEGG pathways
+    ({'id', 'name'}) for zebrafish. Empty list if Entrez doesn't find the
+    gene (e.g. a misspelling/synonym that doesn't match the Entrez index)
+    - doesn't crash."""
     gene_id = resolve_kegg_gene_id(gene_symbol)
     if gene_id is None:
         return []
@@ -301,8 +305,9 @@ def kegg_pathways_for_gene(gene_symbol: str) -> list[dict]:
 
 
 def enrich_with_string_partners(ranked_candidates: list[dict], top_n: int = 10) -> list[dict]:
-    """Lagger till STRING-textmining-partnersignal for de top_n hogst
-    rankade kandidaterna (inte alla - hall antalet externa anrop rimligt)."""
+    """Adds STRING text-mining partner signal for the top_n highest-ranked
+    candidates (not all of them - keeps the number of external calls
+    reasonable)."""
     for entry in ranked_candidates[:top_n]:
         symbol = entry["symbols_seen"][0] if entry["symbols_seen"] else None
         if not symbol:
@@ -312,13 +317,13 @@ def enrich_with_string_partners(ranked_candidates: list[dict], top_n: int = 10) 
             entry["string_partners"] = string_textmining_partners(symbol)
         except requests.exceptions.RequestException as e:
             entry["string_partners"] = []
-            print(f"    STRING-uppslag misslyckades for {symbol} ({e.__class__.__name__})")
+            print(f"    STRING lookup failed for {symbol} ({e.__class__.__name__})")
         _polite_pause()
     return ranked_candidates
 
 
 def enrich_with_kegg_pathways(ranked_candidates: list[dict], top_n: int = 10) -> list[dict]:
-    """Lagger till KEGG-pathways for de top_n hogst rankade kandidaterna."""
+    """Adds KEGG pathways for the top_n highest-ranked candidates."""
     for entry in ranked_candidates[:top_n]:
         symbol = entry["symbols_seen"][0] if entry["symbols_seen"] else None
         if not symbol:
@@ -328,36 +333,36 @@ def enrich_with_kegg_pathways(ranked_candidates: list[dict], top_n: int = 10) ->
             entry["kegg_pathways"] = kegg_pathways_for_gene(symbol)
         except requests.exceptions.RequestException as e:
             entry["kegg_pathways"] = []
-            print(f"    KEGG-uppslag misslyckades for {symbol} ({e.__class__.__name__})")
+            print(f"    KEGG lookup failed for {symbol} ({e.__class__.__name__})")
         _polite_pause()
     return ranked_candidates
 
 
-# --- Visning -----------------------------------------------------------------
+# --- Display -----------------------------------------------------------------
 
-def print_candidate_table(ranked_candidates: list[dict], kategori: str) -> None:
-    """Skriver ut rankad kandidattabell for manuell granskning. Markerar
-    gener som redan finns i CANDIDATE_GENE_SETS[kategori]."""
-    kanda = set(s.lower() for s in CANDIDATE_GENE_SETS.get(kategori, []))
+def print_candidate_table(ranked_candidates: list[dict], category: str) -> None:
+    """Prints a ranked candidate table for manual review. Flags genes that
+    are already in CANDIDATE_GENE_SETS[category]."""
+    known = set(s.lower() for s in CANDIDATE_GENE_SETS.get(category, []))
 
-    print(f"\n== Text-mining-kandidater: {kategori} (zebrafisk-litteratur) ==\n")
+    print(f"\n== Text-mining candidates: {category} (zebrafish literature) ==\n")
     header = (
-        f"{'Symbol(er)':<25} | {'PMIDs':<6} | {'Mentions':<9} | {'Redan i listan?':<16} "
-        "| STRING textmining-partners | KEGG-pathways"
+        f"{'Symbol(s)':<25} | {'PMIDs':<6} | {'Mentions':<9} | {'Already listed?':<16} "
+        "| STRING text-mining partners | KEGG pathways"
     )
     print(header)
     print("-" * len(header))
 
     for entry in ranked_candidates:
         symbols = "/".join(entry["symbols_seen"])
-        redan = "ja" if kanda & set(s.lower() for s in entry["symbols_seen"]) else ""
+        already = "yes" if known & set(s.lower() for s in entry["symbols_seen"]) else ""
         partners = entry.get("string_partners")
         partner_str = ", ".join(p["partner_symbol"] for p in partners[:3]) if partners else "-"
         pathways = entry.get("kegg_pathways")
         pathway_str = ", ".join(p["name"] for p in pathways[:2]) if pathways else "-"
         print(
             f"{symbols:<25} | {entry['pmid_count']:<6} | {entry['mention_count']:<9} "
-            f"| {redan:<16} | {partner_str:<27} | {pathway_str}"
+            f"| {already:<16} | {partner_str:<27} | {pathway_str}"
         )
 
     print_caveats()
@@ -365,47 +370,47 @@ def print_candidate_table(ranked_candidates: list[dict], kategori: str) -> None:
 
 def print_caveats() -> None:
     print(
-        "\nOBS - las innan nagot klipps in i CANDIDATE_GENE_SETS:\n"
-        "  1) Samforekomst i litteratur = korrelation, inte kausalitet. Hog PMID-rankning\n"
-        "     betyder 'namns ofta tillsammans med sokordet', inte 'bevisad orsak till fenotypen'.\n"
-        "  2) Symbol-normalisering: PubTator returnerar den textform artikeln raknat med, som\n"
-        "     kan skilja fran ZFIN:s gemena zebrafisk-konvention (t.ex. 'mstnb' vs 'MSTNB' vs\n"
-        "     'myostatin b'). Verifiera ratt kanonisk symbol och art-ortholog via UniProt\n"
-        "     (candidate_gene_dossier.uniprot_gene_hits) innan den skrivs in.\n"
-        "  3) STRING textmining-score (tscore) och KEGG-pathwaymedlemskap ar ledtradar om\n"
-        "     ytterligare kandidater/mekanismer att titta pa, inte bekraftade fynd for gos.\n"
-        "  4) Detta skript skriver INTE till CANDIDATE_GENE_SETS. Kopiera de symboler du\n"
-        "     bedomer rimliga in i candidate_gene_dossier.py for hand, och kor sedan den\n"
-        "     dossiern (enskild/batch-lage) for att verifiera mot gos-arterna."
+        "\nNOTE - read before pasting anything into CANDIDATE_GENE_SETS:\n"
+        "  1) Co-occurrence in literature = correlation, not causation. A high PMID rank\n"
+        "     means 'often named together with the search term', not 'proven cause of the phenotype'.\n"
+        "  2) Symbol normalization: PubTator returns the text form the article used, which\n"
+        "     may differ from ZFIN's lowercase zebrafish convention (e.g. 'mstnb' vs 'MSTNB' vs\n"
+        "     'myostatin b'). Verify the correct canonical symbol and species ortholog via UniProt\n"
+        "     (candidate_gene_dossier.uniprot_gene_hits) before writing it in.\n"
+        "  3) STRING text-mining score (tscore) and KEGG pathway membership are clues about\n"
+        "     further candidates/mechanisms to look at, not confirmed findings for pikeperch.\n"
+        "  4) This script does NOT write to CANDIDATE_GENE_SETS. Copy the symbols you judge\n"
+        "     reasonable into candidate_gene_dossier.py by hand, then run that\n"
+        "     dossier (single/batch mode) to verify against the pikeperch species."
     )
 
 
 def main():
-    kategorier = list(PHENOTYPE_QUERY_TERMS)
-    kategori = clean_input(
-        f"Fenotypkategori ({'/'.join(kategorier)}) [Enter = tillvaxt]: "
+    categories = list(PHENOTYPE_QUERY_TERMS)
+    category = clean_input(
+        f"Phenotype category ({'/'.join(categories)}) [Enter = growth]: "
     ).lower()
-    if not kategori:
-        kategori = "tillvaxt"
-    if kategori not in PHENOTYPE_QUERY_TERMS:
-        print(f"Okand kategori '{kategori}', anvander 'tillvaxt'.")
-        kategori = "tillvaxt"
+    if not category:
+        category = "growth"
+    if category not in PHENOTYPE_QUERY_TERMS:
+        print(f"Unknown category '{category}', using 'growth'.")
+        category = "growth"
 
-    extra = clean_input("Extra sokterm (Enter for ingen): ")
+    extra = clean_input("Extra search term (Enter for none): ")
     extra_terms = [extra] if extra else None
 
-    ranked = discover_candidates_for_category(kategori, extra_terms)
+    ranked = discover_candidates_for_category(category, extra_terms)
 
     if not ranked:
-        print("Inga genkandidater hittade - prova en annan kategori eller extra sokterm.")
+        print("No gene candidates found - try a different category or extra search term.")
         return
 
-    berika = clean_input("Berika topp-kandidater med STRING + KEGG? [j/N]: ").lower()
-    if berika == "j":
+    enrich = clean_input("Enrich top candidates with STRING + KEGG? [y/N]: ").lower()
+    if enrich == "y":
         ranked = enrich_with_string_partners(ranked)
         ranked = enrich_with_kegg_pathways(ranked)
 
-    print_candidate_table(ranked, kategori)
+    print_candidate_table(ranked, category)
 
 
 if __name__ == "__main__":
